@@ -13,13 +13,47 @@ jobs:
 
       - name: Extract Android source
         run: |
-          unzip -q Myan-FCM-Android-Source.zip
-          test -f myan-fcm-twa/app/build.gradle
-          echo "Android project found."
+          unzip -o Myan-FCM-Android-Source.zip
+          echo "=== Extracted files ==="
+          find . -maxdepth 3 -type f | head -100
 
-      - name: Replace LauncherActivity
+      - name: Install Android SDK 36
         run: |
-          cat > myan-fcm-twa/app/src/main/java/app/base44/myan_copy_c4c14eb9/twa/LauncherActivity.java <<'EOF'
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" \
+                     "platforms;android-36" \
+                     "build-tools;36.0.0"
+
+      - name: Set Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare Gradle
+        working-directory: myan-fcm-twa
+        run: |
+          sed -i "s/gradle-8.*/gradle-8.11.1-bin.zip/" gradle/wrapper/gradle-wrapper.properties 2>/dev/null || true
+
+          if [ ! -f gradlew ]; then
+            echo "gradlew not found, creating Gradle wrapper..."
+            gradle wrapper --gradle-version 8.11.1
+          fi
+
+          chmod +x gradlew
+          ./gradlew --version
+
+      - name: Decode signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > myan-fcm-twa/upload-keystore.jks
+          ls -lh myan-fcm-twa/upload-keystore.jks
+
+      - name: Write LauncherActivity
+        working-directory: myan-fcm-twa
+        run: |
+          cat > app/src/main/java/app/base44/myan_copy_c4c14eb9/twa/LauncherActivity.java <<'EOF'
           package app.base44.myan_copy_c4c14eb9.twa;
 
           import android.Manifest;
@@ -44,16 +78,17 @@ jobs:
 
           import java.lang.reflect.Field;
 
-          public class LauncherActivity extends com.google.androidbrowserhelper.trusted.LauncherActivity {
+          public class LauncherActivity
+                  extends com.google.androidbrowserhelper.trusted.LauncherActivity {
 
               private static final String ORIGIN =
                       "https://myan-copy-c4c14eb9.base44.app";
 
-              private BroadcastReceiver tokenReceiver;
-              private boolean channelReady = false;
-
               private static final String ACTION_TOKEN =
                       MyFirebaseMessagingService.ACTION_TOKEN;
+
+              private BroadcastReceiver tokenReceiver;
+              private boolean channelReady = false;
 
               @Override
               protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -66,21 +101,27 @@ jobs:
                           ) != PackageManager.PERMISSION_GRANTED) {
 
                       requestPermissions(
-                              new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                              new String[]{
+                                      Manifest.permission.POST_NOTIFICATIONS
+                              },
                               7001
                       );
                   }
 
                   tokenReceiver = new BroadcastReceiver() {
                       @Override
-                      public void onReceive(Context context, Intent intent) {
+                      public void onReceive(
+                              Context context,
+                              Intent intent) {
+
                           if (ACTION_TOKEN.equals(intent.getAction())) {
                               sendStoredToken();
                           }
                       }
                   };
 
-                  IntentFilter filter = new IntentFilter(ACTION_TOKEN);
+                  IntentFilter filter =
+                          new IntentFilter(ACTION_TOKEN);
 
                   ContextCompat.registerReceiver(
                           this,
@@ -104,10 +145,13 @@ jobs:
 
               private CustomTabsSession getExistingSession() {
                   try {
-                      Class<?> launcherClass = getClass().getSuperclass();
+                      Class<?> launcherClass =
+                              getClass().getSuperclass();
 
                       Field twaLauncherField =
-                              launcherClass.getDeclaredField("mTwaLauncher");
+                              launcherClass.getDeclaredField(
+                                      "mTwaLauncher"
+                              );
 
                       twaLauncherField.setAccessible(true);
 
@@ -119,7 +163,8 @@ jobs:
                       }
 
                       Field sessionField =
-                              twaLauncher.getClass().getDeclaredField("mSession");
+                              twaLauncher.getClass()
+                                      .getDeclaredField("mSession");
 
                       sessionField.setAccessible(true);
 
@@ -215,13 +260,23 @@ jobs:
                   }
 
                   try {
-
                       JSONObject object =
                               new JSONObject();
 
-                      object.put("type", "FCM_TOKEN");
-                      object.put("token", token);
-                      object.put("fcmToken", token);
+                      object.put(
+                              "type",
+                              "FCM_TOKEN"
+                      );
+
+                      object.put(
+                              "token",
+                              token
+                      );
+
+                      object.put(
+                              "fcmToken",
+                              token
+                      );
 
                       session.postMessage(
                               object.toString(),
@@ -234,15 +289,14 @@ jobs:
           }
           EOF
 
-          echo "LauncherActivity replaced successfully."
-
-      - name: Add PostMessageService
+      - name: Update Android Manifest
+        working-directory: myan-fcm-twa
         run: |
           python3 - <<'PY'
-          path = "myan-fcm-twa/app/src/main/AndroidManifest.xml"
+          from pathlib import Path
 
-          with open(path, "r", encoding="utf-8") as f:
-              s = f.read()
+          p = Path("app/src/main/AndroidManifest.xml")
+          s = p.read_text()
 
           service = '''
               <service
@@ -253,19 +307,16 @@ jobs:
           if "androidx.browser.customtabs.PostMessageService" not in s:
               s = s.replace(
                   '        <service\n            android:name=".MyFirebaseMessagingService"',
-                  service + '\n\n        <service\n            android:name=".MyFirebaseMessagingService"',
-                  1
+                  service + '\n\n        <service\n            android:name=".MyFirebaseMessagingService"'
               )
 
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(s)
-
-          print("PostMessageService added.")
+          p.write_text(s)
           PY
 
-      - name: Create final build.gradle
+      - name: Write app build.gradle
+        working-directory: myan-fcm-twa
         run: |
-          cat > myan-fcm-twa/app/build.gradle <<'EOF'
+          cat > app/build.gradle <<'EOF'
           plugins {
               id 'com.android.application'
               id 'com.google.gms.google-services'
@@ -286,18 +337,25 @@ jobs:
 
               defaultConfig {
                   applicationId 'app.base44.myan_copy_c4c14eb9.twa'
+
                   minSdk 23
-                  targetSdk 35
-                  versionCode 6
-                  versionName '1.3.2.0'
+
+                  targetSdk 36
+
+                  versionCode 7
+                  versionName '1.3.2.1'
               }
 
               buildTypes {
                   release {
                       signingConfig signingConfigs.release
+
                       minifyEnabled true
                       shrinkResources true
-                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+
+                      proguardFiles getDefaultProguardFile(
+                              'proguard-android-optimize.txt'
+                      ), 'proguard-rules.pro'
                   }
               }
 
@@ -309,51 +367,35 @@ jobs:
 
           dependencies {
               implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.7.3'
-              implementation platform('com.google.firebase:firebase-bom:34.18.0')
+
+              implementation platform(
+                      'com.google.firebase:firebase-bom:34.18.0'
+              )
+
               implementation 'com.google.firebase:firebase-messaging'
           }
           EOF
-
-          echo "build.gradle ready."
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.11.1'
-
-      - name: Decode signing keystore
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > myan-fcm-twa/upload-keystore.jks
-          test -f myan-fcm-twa/upload-keystore.jks
-          echo "Keystore ready."
 
       - name: Build AAB
         working-directory: myan-fcm-twa
         env:
           STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          gradle :app:bundleRelease --stacktrace
+          ./gradlew :app:bundleRelease --stacktrace
 
       - name: Verify AAB
         run: |
-          test -f myan-fcm-twa/app/build/outputs/bundle/release/app-release.aab
+          echo "=== AAB ==="
           ls -lh myan-fcm-twa/app/build/outputs/bundle/release/app-release.aab
-          echo "======================================"
-          echo "       MYAN+ AAB BUILD SUCCESS"
-          echo "======================================"
+
+          echo "=== APK/AAB information ==="
+          ls -lh myan-fcm-twa/app/build/outputs/bundle/release/
 
       - name: Upload AAB
         uses: actions/upload-artifact@v4
         with:
-          name: MyanPlus-AAB
+          name: myan-fcm-aab-v7
           path: myan-fcm-twa/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 30
