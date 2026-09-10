@@ -15,7 +15,7 @@ jobs:
         run: |
           unzip -q Myan-FCM-Android-Source.zip
           test -f myan-fcm-twa/app/build.gradle
-          echo "Android project found."
+          echo "Android project OK"
 
       - name: Update compile SDK
         run: |
@@ -39,7 +39,7 @@ jobs:
         run: |
           echo "$KEYSTORE_BASE64" | base64 --decode > myan-fcm-twa/upload-keystore.jks
           test -f myan-fcm-twa/upload-keystore.jks
-          echo "Keystore ready."
+          echo "Keystore OK"
 
       - name: Configure release signing
         working-directory: myan-fcm-twa
@@ -54,7 +54,7 @@ jobs:
           with open(path, "r", encoding="utf-8") as f:
               s = f.read()
 
-          signing = """android {
+          signing_block = """android {
               signingConfigs {
                   release {
                       storeFile file("../upload-keystore.jks")
@@ -65,21 +65,29 @@ jobs:
               }
           """
 
-          if "signingConfigs" not in s:
-              s = s.replace("android {", signing, 1)
+          if "signingConfigs {" not in s:
+              s = s.replace("android {", signing_block, 1)
+
+          old = """buildTypes {
+              release {"""
+
+          new = """buildTypes {
+              release {
+                  signingConfig signingConfigs.release"""
 
           if "signingConfig signingConfigs.release" not in s:
-              s = s.replace(
-                  "release {",
-                  "release {\n            signingConfig signingConfigs.release",
-                  1
-              )
+              if old not in s:
+                  raise SystemExit("Could not find buildTypes release block")
+              s = s.replace(old, new, 1)
 
           with open(path, "w", encoding="utf-8") as f:
               f.write(s)
 
-          print("Signing configured.")
+          print("Signing configuration added correctly.")
           PY
+
+          echo "===== build.gradle ====="
+          cat app/build.gradle
 
       - name: Build AAB
         working-directory: myan-fcm-twa
@@ -90,7 +98,9 @@ jobs:
         run: |
           test -f myan-fcm-twa/app/build/outputs/bundle/release/app-release.aab
           ls -lh myan-fcm-twa/app/build/outputs/bundle/release/app-release.aab
-          echo "AAB SUCCESS."
+          echo "================================"
+          echo "       AAB BUILD SUCCESS"
+          echo "================================"
 
       - name: Upload AAB
         uses: actions/upload-artifact@v4
