@@ -15,12 +15,70 @@ jobs:
         run: |
           unzip -q Myan-FCM-Android-Source.zip
           test -f myan-fcm-twa/app/build.gradle
-          echo "Android project OK"
+          echo "Android project found."
 
-      - name: Update compile SDK
+      - name: Prepare build.gradle
+        working-directory: myan-fcm-twa
         run: |
-          sed -i 's/compileSdk 35/compileSdk 36/' myan-fcm-twa/app/build.gradle
-          grep "compileSdk" myan-fcm-twa/app/build.gradle
+          python3 - <<'PY'
+          path = "app/build.gradle"
+
+          with open(path, "r", encoding="utf-8") as f:
+              s = f.read()
+
+          # Update compile SDK
+          s = s.replace(
+              "    compileSdk 35",
+              "    compileSdk 36",
+              1
+          )
+
+          # Add signing configuration
+          signing_config = """    signingConfigs {
+              release {
+                  storeFile file("../upload-keystore.jks")
+                  storePassword System.getenv("STORE_PASSWORD")
+                  keyAlias System.getenv("KEY_ALIAS")
+                  keyPassword System.getenv("KEY_PASSWORD")
+              }
+          }
+
+          """
+
+          if "signingConfigs {" not in s:
+              s = s.replace(
+                  "    compileSdk 36\n\n",
+                  "    compileSdk 36\n\n" + signing_config,
+                  1
+              )
+
+          # Add signing config to release build type
+          release_line = """    buildTypes {
+              release {
+          """
+
+          release_replacement = """    buildTypes {
+              release {
+                  signingConfig signingConfigs.release
+          """
+
+          if "signingConfig signingConfigs.release" not in s:
+              if release_line not in s:
+                  raise SystemExit("ERROR: release block not found.")
+              s = s.replace(
+                  release_line,
+                  release_replacement,
+                  1
+              )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(s)
+
+          print("build.gradle prepared successfully.")
+          PY
+
+          echo "===== FINAL build.gradle ====="
+          cat app/build.gradle
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -39,68 +97,24 @@ jobs:
         run: |
           echo "$KEYSTORE_BASE64" | base64 --decode > myan-fcm-twa/upload-keystore.jks
           test -f myan-fcm-twa/upload-keystore.jks
-          echo "Keystore OK"
+          echo "Keystore decoded successfully."
 
-      - name: Configure release signing
+      - name: Build AAB
         working-directory: myan-fcm-twa
         env:
           STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          python3 - <<'PY'
-          path = "app/build.gradle"
-
-          with open(path, "r", encoding="utf-8") as f:
-              s = f.read()
-
-          signing_block = """android {
-              signingConfigs {
-                  release {
-                      storeFile file("../upload-keystore.jks")
-                      storePassword System.getenv("STORE_PASSWORD")
-                      keyAlias System.getenv("KEY_ALIAS")
-                      keyPassword System.getenv("KEY_PASSWORD")
-                  }
-              }
-          """
-
-          if "signingConfigs {" not in s:
-              s = s.replace("android {", signing_block, 1)
-
-          old = """buildTypes {
-              release {"""
-
-          new = """buildTypes {
-              release {
-                  signingConfig signingConfigs.release"""
-
-          if "signingConfig signingConfigs.release" not in s:
-              if old not in s:
-                  raise SystemExit("Could not find buildTypes release block")
-              s = s.replace(old, new, 1)
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(s)
-
-          print("Signing configuration added correctly.")
-          PY
-
-          echo "===== build.gradle ====="
-          cat app/build.gradle
-
-      - name: Build AAB
-        working-directory: myan-fcm-twa
-        run: |
           gradle :app:bundleRelease --stacktrace
 
-      - name: Check AAB
+      - name: Verify AAB
         run: |
           test -f myan-fcm-twa/app/build/outputs/bundle/release/app-release.aab
           ls -lh myan-fcm-twa/app/build/outputs/bundle/release/app-release.aab
-          echo "================================"
-          echo "       AAB BUILD SUCCESS"
-          echo "================================"
+          echo "======================================"
+          echo "       MYAN+ AAB BUILD SUCCESS"
+          echo "======================================"
 
       - name: Upload AAB
         uses: actions/upload-artifact@v4
