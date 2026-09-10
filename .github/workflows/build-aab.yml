@@ -13,7 +13,7 @@ jobs:
 
       - name: Update compile SDK
         run: |
-          sed -i 's/compileSdk 35/compileSdk 36/' myan-fcm-twa/app/build.gradle
+          sed -i 's/compileSdk 35/compileSdk 36/' android-source/myan-fcm-twa/app/build.gradle
 
       - name: Set up Java
         uses: actions/setup-java@v4
