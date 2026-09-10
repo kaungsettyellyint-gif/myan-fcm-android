@@ -11,11 +11,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract Android source
+      - name: Update compile SDK
         run: |
-          unzip -q Myan-FCM-Android-Source.zip
-          cd myan-fcm-twa
-          ls -la
+          sed -i 's/compileSdk 35/compileSdk 36/' myan-fcm-twa/app/build.gradle
 
       - name: Set up Java
         uses: actions/setup-java@v4
