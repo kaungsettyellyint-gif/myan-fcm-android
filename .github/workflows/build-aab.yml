@@ -11,9 +11,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Extract Android source
+        run: |
+          unzip -q Myan-FCM-Android-Source.zip
+          echo "=== Project structure ==="
+          find android-source -maxdepth 3 -type f | head -100
+
+      - name: Verify Android project
+        run: |
+          test -f android-source/myan-fcm-twa/app/build.gradle
+          test -f android-source/myan-fcm-twa/settings.gradle
+          test -f android-source/myan-fcm-twa/google-services.json || true
+          echo "Android project found successfully."
+
       - name: Update compile SDK
         run: |
           sed -i 's/compileSdk 35/compileSdk 36/' android-source/myan-fcm-twa/app/build.gradle
+          grep -n "compileSdk" android-source/myan-fcm-twa/app/build.gradle
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -30,20 +44,27 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > myan-fcm-twa/upload-keystore.jks
+          echo "$KEYSTORE_BASE64" | base64 --decode > android-source/myan-fcm-twa/upload-keystore.jks
+          test -f android-source/myan-fcm-twa/upload-keystore.jks
+          echo "Keystore decoded successfully."
 
       - name: Configure release signing
-        working-directory: myan-fcm-twa
+        working-directory: android-source/myan-fcm-twa
         env:
           STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
           python3 - <<'PY'
-          p = "app/build.gradle"
-          s = open(p).read()
+          import re
 
-          signing_block = """
+          path = "app/build.gradle"
+
+          with open(path, "r", encoding="utf-8") as f:
+              s = f.read()
+
+          if "signingConfigs" not in s:
+              signing_block = """android {
               signingConfigs {
                   release {
                       storeFile file("../upload-keystore.jks")
@@ -53,34 +74,38 @@ jobs:
                   }
               }
           """
+              s = s.replace("android {", signing_block, 1)
 
-          s = s.replace(
-              "android {",
-              "android {" + signing_block,
-              1
-          )
+          if "signingConfig signingConfigs.release" not in s:
+              s = re.sub(
+                  r"(buildTypes\\s*\\{\\s*release\\s*\\{)",
+                  r"\\1\n            signingConfig signingConfigs.release",
+                  s,
+                  count=1
+              )
 
-          s = s.replace(
-              "buildTypes {",
-              """buildTypes {
-                  release {
-                      signingConfig signingConfigs.release
-                  }
-              }
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(s)
 
-              buildTypes {""",
-              1
-          )
-
-          open(p, "w").write(s)
+          print("Release signing configured.")
           PY
 
+          echo "=== Final build.gradle ==="
+          sed -n '1,120p' app/build.gradle
+
       - name: Build AAB
-        working-directory: myan-fcm-twa
-        run: gradle :app:bundleRelease
+        working-directory: android-source/myan-fcm-twa
+        run: |
+          gradle :app:bundleRelease --stacktrace
+
+      - name: Verify AAB
+        run: |
+          test -f android-source/myan-fcm-twa/app/build/outputs/bundle/release/app-release.aab
+          ls -lh android-source/myan-fcm-twa/app/build/outputs/bundle/release/app-release.aab
+          echo "AAB build successful."
 
       - name: Upload AAB
         uses: actions/upload-artifact@v4
         with:
           name: MyanPlus-AAB
-          path: myan-fcm-twa/app/build/outputs/bundle/release/app-release.aab
+          path: android-source/myan-fcm-twa/app/build/outputs/bundle/release/app-release.aab
