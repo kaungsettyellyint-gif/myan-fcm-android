@@ -1,1 +1,76 @@
+name: Build Myan+ AAB
 
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract Android source
+        run: |
+          unzip -q Myan-FCM-Android-Source.zip
+          cd myan-fcm-twa
+          ls -la
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Decode signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > myan-fcm-twa/upload-keystore.jks
+
+      - name: Configure release signing
+        working-directory: myan-fcm-twa
+        env:
+          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          python3 - <<'PY'
+          p = "app/build.gradle"
+          s = open(p).read()
+
+          marker = "android {"
+          signing = """android {
+              signingConfigs {
+                  release {
+                      storeFile file("../upload-keystore.jks")
+                      storePassword System.getenv("STORE_PASSWORD")
+                      keyAlias System.getenv("KEY_ALIAS")
+                      keyPassword System.getenv("KEY_PASSWORD")
+                  }
+              }
+          """
+          s = s.replace(marker, signing, 1)
+          s = s.replace(
+              "release {\n            minifyEnabled true",
+              "release {\n            signingConfig signingConfigs.release\n            minifyEnabled true",
+              1
+          )
+          open(p, "w").write(s)
+          PY
+
+      - name: Build AAB
+        working-directory: myan-fcm-twa
+        run: gradle :app:bundleRelease
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyanPlus-AAB
+          path: myan-fcm-twa/app/build/outputs/bundle/release/app-release.aab
