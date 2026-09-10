@@ -17,6 +17,252 @@ jobs:
           test -f myan-fcm-twa/app/build.gradle
           echo "Android project found."
 
+      - name: Replace LauncherActivity
+        run: |
+          cat > myan-fcm-twa/app/src/main/java/app/base44/myan_copy_c4c14eb9/twa/LauncherActivity.java <<'EOF'
+          package app.base44.myan_copy_c4c14eb9.twa;
+
+          import android.Manifest;
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.IntentFilter;
+          import android.content.SharedPreferences;
+          import android.content.pm.PackageManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+
+          import androidx.annotation.Nullable;
+          import androidx.browser.customtabs.CustomTabsCallback;
+          import androidx.browser.customtabs.CustomTabsSession;
+          import androidx.core.content.ContextCompat;
+
+          import com.google.androidbrowserhelper.trusted.QualityEnforcer;
+
+          import org.json.JSONObject;
+
+          import java.lang.reflect.Field;
+
+          public class LauncherActivity extends com.google.androidbrowserhelper.trusted.LauncherActivity {
+
+              private static final String ORIGIN =
+                      "https://myan-copy-c4c14eb9.base44.app";
+
+              private BroadcastReceiver tokenReceiver;
+              private boolean channelReady = false;
+
+              private static final String ACTION_TOKEN =
+                      MyFirebaseMessagingService.ACTION_TOKEN;
+
+              @Override
+              protected void onCreate(@Nullable Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  if (Build.VERSION.SDK_INT >= 33 &&
+                          ContextCompat.checkSelfPermission(
+                                  this,
+                                  Manifest.permission.POST_NOTIFICATIONS
+                          ) != PackageManager.PERMISSION_GRANTED) {
+
+                      requestPermissions(
+                              new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                              7001
+                      );
+                  }
+
+                  tokenReceiver = new BroadcastReceiver() {
+                      @Override
+                      public void onReceive(Context context, Intent intent) {
+                          if (ACTION_TOKEN.equals(intent.getAction())) {
+                              sendStoredToken();
+                          }
+                      }
+                  };
+
+                  IntentFilter filter = new IntentFilter(ACTION_TOKEN);
+
+                  ContextCompat.registerReceiver(
+                          this,
+                          tokenReceiver,
+                          filter,
+                          ContextCompat.RECEIVER_NOT_EXPORTED
+                  );
+              }
+
+              @Override
+              protected void onDestroy() {
+                  if (tokenReceiver != null) {
+                      try {
+                          unregisterReceiver(tokenReceiver);
+                      } catch (Exception ignored) {
+                      }
+                  }
+
+                  super.onDestroy();
+              }
+
+              private CustomTabsSession getExistingSession() {
+                  try {
+                      Class<?> launcherClass = getClass().getSuperclass();
+
+                      Field twaLauncherField =
+                              launcherClass.getDeclaredField("mTwaLauncher");
+
+                      twaLauncherField.setAccessible(true);
+
+                      Object twaLauncher =
+                              twaLauncherField.get(this);
+
+                      if (twaLauncher == null) {
+                          return null;
+                      }
+
+                      Field sessionField =
+                              twaLauncher.getClass().getDeclaredField("mSession");
+
+                      sessionField.setAccessible(true);
+
+                      Object session =
+                              sessionField.get(twaLauncher);
+
+                      if (session instanceof CustomTabsSession) {
+                          return (CustomTabsSession) session;
+                      }
+
+                  } catch (Exception ignored) {
+                  }
+
+                  return null;
+              }
+
+              @Override
+              protected CustomTabsCallback getCustomTabsCallback() {
+
+                  return new QualityEnforcer() {
+
+                      @Override
+                      public void onNavigationEvent(
+                              int navigationEvent,
+                              @Nullable Bundle extras) {
+
+                          super.onNavigationEvent(
+                                  navigationEvent,
+                                  extras
+                          );
+
+                          if (navigationEvent != NAVIGATION_FINISHED) {
+                              return;
+                          }
+
+                          CustomTabsSession session =
+                                  getExistingSession();
+
+                          if (session == null) {
+                              return;
+                          }
+
+                          try {
+                              session.requestPostMessageChannel(
+                                      Uri.parse(ORIGIN),
+                                      Uri.parse(ORIGIN),
+                                      new Bundle()
+                              );
+                          } catch (Exception ignored) {
+                          }
+                      }
+
+                      @Override
+                      public void onMessageChannelReady(
+                              @Nullable Bundle extras) {
+
+                          super.onMessageChannelReady(extras);
+
+                          channelReady = true;
+
+                          sendStoredToken();
+                      }
+                  };
+              }
+
+              private void sendStoredToken() {
+
+                  if (!channelReady) {
+                      return;
+                  }
+
+                  CustomTabsSession session =
+                          getExistingSession();
+
+                  if (session == null) {
+                      return;
+                  }
+
+                  SharedPreferences prefs =
+                          getSharedPreferences(
+                                  MyFirebaseMessagingService.PREFS,
+                                  MODE_PRIVATE
+                          );
+
+                  String token =
+                          prefs.getString(
+                                  MyFirebaseMessagingService.KEY_TOKEN,
+                                  null
+                          );
+
+                  if (token == null || token.isEmpty()) {
+                      return;
+                  }
+
+                  try {
+
+                      JSONObject object =
+                              new JSONObject();
+
+                      object.put("type", "FCM_TOKEN");
+                      object.put("token", token);
+                      object.put("fcmToken", token);
+
+                      session.postMessage(
+                              object.toString(),
+                              null
+                      );
+
+                  } catch (Exception ignored) {
+                  }
+              }
+          }
+          EOF
+
+          echo "LauncherActivity replaced successfully."
+
+      - name: Add PostMessageService
+        run: |
+          python3 - <<'PY'
+          path = "myan-fcm-twa/app/src/main/AndroidManifest.xml"
+
+          with open(path, "r", encoding="utf-8") as f:
+              s = f.read()
+
+          service = '''
+              <service
+                  android:name="androidx.browser.customtabs.PostMessageService"
+                  android:exported="true" />
+          '''
+
+          if "androidx.browser.customtabs.PostMessageService" not in s:
+              s = s.replace(
+                  '        <service\n            android:name=".MyFirebaseMessagingService"',
+                  service + '\n\n        <service\n            android:name=".MyFirebaseMessagingService"',
+                  1
+              )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(s)
+
+          print("PostMessageService added.")
+          PY
+
       - name: Create final build.gradle
         run: |
           cat > myan-fcm-twa/app/build.gradle <<'EOF'
@@ -68,8 +314,7 @@ jobs:
           }
           EOF
 
-          echo "===== FINAL build.gradle ====="
-          cat myan-fcm-twa/app/build.gradle
+          echo "build.gradle ready."
 
       - name: Set up Java
         uses: actions/setup-java@v4
